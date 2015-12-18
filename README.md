@@ -1,2 +1,0 @@
-# dchq-docker-java-solr-mongo-cassandra-example
-A Java application that uses Solr for the full-text search and that can be deployed on Docker-based JBoss, Tomcat and Jetty application servers. The Java application can also connect to MySQL, Oracle XE, Cassandra and Mongo Replica Set. This project is public and is designed to provide a step-by-step guide for Dockerizing and managing your Java applications using DCHQ
