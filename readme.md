@@ -61,7 +61,7 @@ DCHQ - Docker Java Example
 
  
 
-A Step by Step Guide for Deploying & Managing a Java Application on Docker-based WebSphere, JBoss, Tomcat and Jetty Application Servers
+A Step by Step Guide for Deploying & Managing a Docker-based Java Application with Solr on Mongo, Cassandra, MySQL and Oracle
 =======================================================================================================================================
  
 
