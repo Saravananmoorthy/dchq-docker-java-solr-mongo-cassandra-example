@@ -1,7 +1,10 @@
-To run & manage the **28** Java application templates in this project on 13 different clouds and virtualization platforms (including vSphere, OpenStack, AWS, Rackspace, Microsoft Azure, Google Compute Engine, DigitalOcean, IBM SoftLayer, etc.), make sure that you either:
+This is an extension of this project (https://github.com/dchqinc/dchq-docker-java-example). The application now supports Solr for full-text search and both Mongo & Cassandra as the supported databases.
+
+To run & manage the **24** Java application templates in this project on 13 different clouds and virtualization platforms (including vSphere, OpenStack, AWS, Rackspace, Microsoft Azure, Google Compute Engine, DigitalOcean, IBM SoftLayer, etc.), make sure that you either:
 -   **Sign Up for FREE on DCHQ.io** -- <http://dchq.io> (no credit card required), or
 -   **Download DCHQ On-Premise Standard Edition for FREE** -- <http://dchq.co/dchq-on-premise-download.html>
 
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ)
 
 **Table of Contents**  
 
@@ -88,15 +91,17 @@ To address these questions, we created a sample “Names Directory” Java appli
 
 -   Apache HTTP Server (httpd) and Nginx (for load balancing)
 
--   WebSphere, JBoss, Tomcat and Jetty (as the application server)
+-   JBoss, Tomcat and Jetty (as the application server)
 
--   MySQL, PostgreSQL, and Oracle (for the database)
+-   Solr (for the full-text search)
+
+-   Mongo, Cassandra, MySQL, and Oracle (for the database)
 
 In this project, we will provide a step-by-step guide for configuring, deploying and managing this Java application using different application stacks and on different cloud/virtual infrastructure.
 
 We will cover:
 
--   Configuring the web.xml and webapp-config.xml files in the Java application
+-   Configuring the Java files for database and Solr connection environment variables
 
 -   Using the liquibase bean to initialize the connected database
 
@@ -114,14 +119,16 @@ We will cover:
 
  
 
-Configuring the web.xml and webapp-config.xml files in the Java application
+Configuring the Java files for database and Solr connection environment variables
 ---------------------------------------------------------------------------
 
 You can clone this sample “Names Directory” Java application from GitHub.
 
-**git clone** <https://github.com/dchqinc/dchq-docker-java-example.git>
+**git clone** <https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example.git>
 
 This is the most important step in “Dockerizing” your Java application. In order to leverage the environment variables you can pass when running containers, you will need to make sure that your application is configured in a way that will allow you to change certain properties at request time – like:
+
+-   The Solr URL & port you would like to use
 
 -   The database driver you would like to use
 
@@ -131,105 +138,190 @@ This is the most important step in “Dockerizing” your Java application. In o
 
 -   Any other parameters that you would like to change at request time (e.g. the min/max connection pool size, idle timeout, etc.)
 
-To achieve this, you will first need to configure **web.xml** to use the bootstrap Servlet to start up the Spring context.
+To achieve this, we created several Java files to declare the environment variables we need to use to connect to the database and Solr. The Java files can be found in the config directory:
 
-<https://github.com/dchqinc/dchq-docker-java-example/blob/master/src/main/webapp/WEB-INF/web.xml>
+<https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/tree/master/src/main/java/dchq/dbconnect/config>
 
+Let's first examine **SolrConfig.java**:
+<https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/blob/master/src/main/java/dchq/dbconnect/config/SolrConfig.java>
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    <servlet>
-        <servlet-name>DispatcherServlet</servlet-name>
-        <servlet-class>org.springframework.web.servlet.DispatcherServlet</servlet-class>
-        <init-param>
-            <param-name>contextConfigLocation</param-name>
-            <param-value>/WEB-INF/spring/webapp-config.xml</param-value>
-        </init-param>
-        <load-on-startup>1</load-on-startup>
-    </servlet> 
+@Configuration
+public class SolrConfig {
+    public static final String SOLR_HOST = "solr_host";
+    public static final String SOLR_PORT = "solr_port";
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-You will notice that the **contextConfigLocation** is referencing **/WEB-INF/spring/webapp-config.xml**
+You will notice that **solr_host** and **solr_port** are declared as environment variables that you can pass when running the application server container. 
 
-Next, we will need to configure parameters in the **webapp-config.xml** file to reference host environment variables that will be passed at request time.
+Now let's examine **DatabaseConfig.java**:
+<https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/blob/master/src/main/java/dchq/dbconnect/config/DatabaseConfig.java>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+@Configuration
+public class DatabaseConfig {
 
-<https://github.com/dchqinc/dchq-docker-java-example/blob/master/src/main/webapp/WEB-INF/spring/webapp-config.xml>
+    public static final String DRIVER_CLASS_NAME = "database_driverClassName";
+    public static final String DATABASE_URL = "database_url";
+    public static final String DATABASE_USERNAME = "database_username";
+    public static final String DATABASE_PASSWORD = "database_password";
+
+    @Autowired
+    private Environment env;
+
+    @Bean(destroyMethod = "release")
+    public DBPoolDataSource dataSource() {
+        if (!isDatabaseProvided()) {
+            return null;
+        }
+        DBPoolDataSource dbPoolDataSource = new DBPoolDataSource();
+        dbPoolDataSource.setDriverClassName(env.getRequiredProperty(DRIVER_CLASS_NAME));
+        dbPoolDataSource.setUrl(env.getRequiredProperty(DATABASE_URL));
+        dbPoolDataSource.setUser(env.getRequiredProperty(DATABASE_USERNAME));
+        dbPoolDataSource.setPassword(env.getRequiredProperty(DATABASE_PASSWORD));
+        dbPoolDataSource.setMinPool(1);
+        dbPoolDataSource.setMaxPool(10);
+        dbPoolDataSource.setMaxSize(10);
+        dbPoolDataSource.setIdleTimeout(60);
+
+        return dbPoolDataSource;
+    }
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    <bean id="dataSource" class="snaq.db.DBPoolDataSource" destroy-method="release">
-        <property name="driverClassName" value="${database_driverClassName}"/>
-        <property name="url" value="${database_url}"/>
-        <property name="user" value="${database_username}"/>
-        <property name="password" value="${database_password}"/>
-        <property name="minPool" value="1"/>
-        <property name="maxPool" value="10"/>
-        <property name="maxSize" value="10"/>
-        <property name="idleTimeout" value="60"/>
-    </bean>
+
+You will notice that **database_driverClassName**, **database_url**, **database_username**, and **database_password** are declared as environment variables that you can pass when running the application server container. These will be used to connect MySQL, PostgreSQL and Oracle databases.
+
+Next, we'll examine **MongoConfig.java**:
+<https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/blob/master/src/main/java/dchq/dbconnect/config/MongoConfig.java>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+@Configuration
+public class MongoConfig {
+    public static final String MONGO_URL = "mongo_url";
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-You will notice that specific dataSource properties are referencing the following environment variables that will be passed on at request time:
+You will notice that **mongo_url** is declared as environment variables that you can pass when running the application server container. 
 
--   **database_driverClassName**
+However the MongoConfig.java is also used to populate the database with the right schema & table at startup -- if this table is not already found.
 
--   **database_url**
 
--   **database_username**
+Finally, we'll examine **CassandraConfig.java**:
+<https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/blob/master/src/main/java/dchq/dbconnect/config/CassandraConfig.java>
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+@Configuration
+public class CassandraConfig {
+    public static final String CASSANDRA_URL = "cassandra_url";
 
--   **database_password**
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+You will notice that **cassandra_url** is declared as environment variables that you can pass when running the application server container. 
+
+However the CassandraConfig.java is also used to populate the database with the right schema & table at startup -- if this table is not already found.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    @Bean
+    public CassandraTemplate cassandraTemplate() {
+        if (!this.isCassandraUrlProvided()) {
+            return null;
+        }
+        Cluster cluster = Cluster.builder().addContactPointsWithPorts(Collections.singletonList(new InetSocketAddress(host, port))).build();
+        session = cluster.connect();
+
+        this.recreateDatabase();
+
+        session.execute("USE " + keyspace);
+
+        CassandraTemplate cassandraTemplate = new CassandraTemplate(session);
+        return cassandraTemplate;
+    }
+
+    protected void recreateDatabase() {
+        boolean needToCreate = true;
+        List<Row> rows = session.execute("select * from system.schema_keyspaces").all();
+        for (Row row : rows) {
+            if (keyspace.equals(row.getString(0))) {
+                needToCreate = false;
+                break;
+            }
+        }
+
+        if (needToCreate) {
+            session.execute("CREATE KEYSPACE " + keyspace + " with replication = {'class':'SimpleStrategy', 'replication_factor':1}");
+            session.execute("USE " + keyspace);
+            session.execute("CREATE TABLE " + keyspace + ".namedirectorynosql (\n" +
+                    "    objectid text PRIMARY KEY,\n" +
+                    "    id int ,\n" +
+                    "    firstName text,\n" +
+                    "    lastName text,\n" +
+                    "    createdTimestamp timestamp\n" +
+                    ")");
+            session.execute("CREATE INDEX id_idx ON " + keyspace + ".namedirectorynosql (id)");
+        }
+    }
+
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
  
 
-Using the liquibase bean to initialize the connected database
+Using the liquibase bean to initialize the connected MySQL, PostgreSQL and Oracle databases
 -------------------------------------------------------------
 
 We typically recommend initializing the database schema as part of the Java application deployment itself. This way, you don’t have to worry about maintaining separate SQL files that need to be executed on the database separately.
 
 However if you already have those SQL files and you still prefer executing them on the database separately – then DCHQ can help you automate this process through its plug-in framework. You can refer to this <a href=#invoking-a-plug-in-to-initialize-the-database-separately-on-a-3-tier-java-nginx--tomcat--mysql>section</a> for more information.
 
-In order to include the SQL scripts for creating the database tables in the Java application, you will need to configure **webapp-config.xml** file to use **liquibase** bean that checks the dataSource and runs new statements from upgrade.sql. Liquibase tracks which changelog statements have run against each database.
+Initializing the Mongo and Cassandra databases is covered in the MongoConfig.java and CassandraConfig.java files.
 
-<https://github.com/dchqinc/dchq-docker-java-example/blob/master/src/main/webapp/WEB-INF/spring/webapp-config.xml>
+For MySQL, PostgreSQL and Oracle, the **liquibase** bean is used in the DatabaseConfig.java file to check the dataSource and run SQL statements from upgrade.sql. Liquibase tracks which changelog statements have run against each database.
+
+<https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/blob/master/src/main/java/dchq/dbconnect/config/DatabaseConfig.java>
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    <bean id="liquibase" class="liquibase.integration.spring.SpringLiquibase">
-        <property name="dataSource" ref="dataSource" />
-        <property name="changeLog" value="/WEB-INF/upgrade/upgrade.sql" />
-    </bean>
+    @Bean
+    public SpringLiquibase liquibase() {
+        if (!isDatabaseProvided()) {
+            return null;
+        }
+        SpringLiquibase springLiquibase = new SpringLiquibase();
+        springLiquibase.setChangeLog("/WEB-INF/upgrade/upgrade.sql");
+        springLiquibase.setDataSource(this.dataSource());
+
+        return springLiquibase;
+    }
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Here’s the actual upgrade.sql file with the SQL statements for initializing the schema on the connected MySQL, PostgreSQL or Oracle database.
 
-<https://github.com/dchqinc/dchq-docker-java-example/blob/master/src/main/webapp/WEB-INF/upgrade/upgrade.sql>
+<https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/blob/master/src/main/webapp/WEB-INF/upgrade/upgrade.sql>
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 --liquibase formatted sql
 
 --changeset admin:1 dbms:mysql
 CREATE TABLE IF NOT EXISTS `NameDirectory` (
-    `id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
-    `firstName` VARCHAR(50) NOT NULL,
-    `lastName` VARCHAR(50) NOT NULL,
-    `createdTimestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (`id`)
+	`id` INT(10) UNSIGNED NOT NULL AUTO_INCREMENT,
+	`firstName` VARCHAR(50) NOT NULL,
+	`lastName` VARCHAR(50) NOT NULL,
+	`createdTimestamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+	PRIMARY KEY (`id`)
 )
 ENGINE=InnoDB;
 
 --changeset admin:1 dbms:postgresql
 CREATE TABLE "NameDirectory" (
-    id SERIAL NOT NULL,
-    "firstName" VARCHAR(50) NOT NULL,
-    "lastName" VARCHAR(50) NOT NULL,
-    "createdTimestamp" TIMESTAMP(0) WITHOUT TIME ZONE DEFAULT timestamp 'now ()' NOT NULL,
-    PRIMARY KEY(id)
+	id SERIAL NOT NULL,
+	"firstName" VARCHAR(50) NOT NULL,
+	"lastName" VARCHAR(50) NOT NULL,
+	"createdTimestamp" TIMESTAMP(0) WITHOUT TIME ZONE DEFAULT timestamp 'now ()' NOT NULL,
+	PRIMARY KEY(id)
 )
-    WITH (oids = false);
+	WITH (oids = false);
 
 --changeset admin:1 dbms:oracle
 CREATE TABLE NameDirectory (
-    id NUMBER(10) NOT NULL,
-    firstName VARCHAR2(50) NOT NULL,
-    lastName VARCHAR2(50) NOT NULL,
-    createdTimestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT id_pk PRIMARY KEY (id)
+	id NUMBER(10) NOT NULL,
+	firstName VARCHAR2(50) NOT NULL,
+	lastName VARCHAR2(50) NOT NULL,
+	createdTimestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+	CONSTRAINT id_pk PRIMARY KEY (id)
 );
 CREATE SEQUENCE NameDirectory_seq;
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -237,14 +329,15 @@ CREATE SEQUENCE NameDirectory_seq;
 Building the YAML-based application templates that can re-used on any Linux host running anywhere
 -------------------------------------------------------------------------------------------------
 
-Once logged in to DCHQ (either the hosted DCHQ.io or on-premise version), a user can navigate to **Manage** > **Templates** and then click on the **+** button to create a new **Docker Compose** template.
+Once logged in to DCHQ (either the hosted DCHQ.io or on-premise version), a user can navigate to **Manage** > **App/Machine** and then click on the **+** button to create a new **Docker Compose** template.
 
-We have created **28 application templates** using the **official images from Docker Hub** for the same “Names Directory” Java application – but for different application servers and databases.
+We have created **24 application templates** using the **official images from Docker Hub** for the same “Names Directory” Java application – but for different application servers and databases.
 
 The templates include examples of the following application stacks (for the same Java application):
 -   **Apache HTTP Server (httpd) & Nginx** -- for load balancing
--   **Tomcat, Jetty, WebSphere and JBoss** -- for the application servers
--   **MySQL, MariaDB, PostgreSQL and Oracle XE** -- for the databases
+-   **Solr** -- for the full-text search
+-   **Tomcat, Jetty, and JBoss** -- for the application servers
+-   **Mongo, Cassandra, MySQL, and Oracle XE** -- for the databases
 
 ### Plug-ins to Configure Web Servers and Application Servers at **Request Time & Post-Provision**
 
@@ -254,7 +347,7 @@ These plug-ins can be created by navigating to **Manage > Plug-ins**. Once the B
 
 The plug-in ID needs to be provided when defining the YAML-based application template. For example, to invoke a BASH script plug-in for Nginx, we would reference the plug-in ID as follows:
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
+Nginx:
   image: nginx:latest
   publish_all: true
   mem_min: 50m
@@ -263,8 +356,12 @@ LB:
     - !plugin
       id: 0H1Nk
       restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
       arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 In the example templates, we are invoking 4 BASH script plug-ins.
@@ -273,15 +370,28 @@ In the example templates, we are invoking 4 BASH script plug-ins.
 
 **Apache HTTP Server (httpd)** is invoking a BASH script plug-in that injects container IP’s of the application servers in the httpd.conf file dynamically (or at request time). The plug-in ID is **uazUi**.
 
-The beauty of the Nginx and Apache HTTP Server (httpd) plug-ins is that they can be executed post-provision as part of the application server cluster scale in or scale out. This makes it possible to define auto-scale policies that automatically update the web server (or load balancer).
+The beauty of the Nginx and Apache HTTP Server (httpd) plug-ins is that they can be executed post-provision as part of the application server cluster scale in or scale out. This makes it possible to define auto-scale policies that automatically update the web server (or load balancer). 
+
+The **lifecycle** parameter in plug-ins allows you to specify the exact stage or event to execute the plug-in. If not lifecycle is specified, then by default, the plug-in will be execute **on_create**. Here are the supported lifecycle stages:
+
+-   **on_create** -- executes the plug-in when creating the container
+-   **on_start** -- executes the plug-in after a container starts
+-   **on_stop** -- executes the plug-in before a container stops
+-   **on_destroy** -- executes the plug-in before destroying a container
+-   **post_create** -- executes the plug-in after the container is created and running
+-   **post_start[:Node]** -- executes the plug-in after another container starts
+-   **post_stop[:Node]** -- executes the plug-in after another container stops
+-   **post_destroy[:Node]** -- executes the plug-in after another container is destroyed
+-   **post_scale_out[:Node]** -- executes the plug-in after another cluster of containers is scaled out
+-   **post_scale_in[:Node]** -- executes the plug-in after another cluster of containers is scaled in
 
 To get access to the Nginx and Apache HTTP Server (httpd) plug-ins under the EULA license, make sure you either:
 -   **Sign Up for FREE on DCHQ.io** -- <http://dchq.io> (no credit card required)
 -   **Download DCHQ On-Premise Standard Edition for FREE** -- <http://dchq.co/dchq-on-premise-download.html>
 
-The application servers (Tomcat, Jetty, JBoss and WebSphere) are also invoking a BASH script plug-in to deploy the Java WAR file from the accessible GitHub URL.
+The application servers (Tomcat, Jetty, and JBoss) are also invoking a BASH script plug-in to deploy the Java WAR file from the accessible GitHub URL.
 
-<https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war>
+<https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war>
 
 **Tomcat, JBoss and Jetty** are invoking the exact same BASH script plug-in (plug-in ID: **oncXN**) – except the WAR file is getting deployed on different directories:
 
@@ -291,48 +401,10 @@ The application servers (Tomcat, Jetty, JBoss and WebSphere) are also invoking a
 
 -   JBoss – dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
 
-The BASH script plug-in was created by navigating to **Manage** > **Plug-ins** and looks something like this:
+**Solr** is invoking a different BASH script plug-in (plug-in ID: **doX8s**) that will get the names.zip file and unzip it in /opt/solr/server/solr/
 
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#!/bin/bash
+<https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip>
 
-# The sleep command is used to wait for Oracle to fully initialize
-sleep 10;
-rm –rf $delete_dir
-curl -L -o $dir $file_url
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**$delete_dir**, **$dir** and **$file_url** are overrideable arguments that can be defined when creating the plug-ins or when requesting the application.
-
-<figure>
-<img src="screenshots/0-Java%20WAR%20File%20Deployment%20Plug-in.png"  />
-</figure>
-
-**WebSphere** is invoking a different BASH script plug-in (plug-in ID: **rPuVb**) that will first execute init-server-env.sh and then deploy the Java WAR file from the accessible GitHub URL
-
-<https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war>
-
-<https://github.com/dchqinc/dchq-docker-java-example/blob/master/websphere-config/init-server-env.sh>
-
-The Java WAR file will be deployed on this directory:
-
--   WebSphere– dir= /opt/ibm/wlp/usr/servers/defaultServer/dropins/dbconnect.war
-
-The BASH script plug-in was created by navigating to **Manage** > **Plug-ins** and looks something like this:
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-#!/bin/bash
-
-echo database_driverClassName=$database_driverClassName >> /opt/ibm/wlp/usr/servers/defaultServer/server.env
-echo database_url=$database_url >> /opt/ibm/wlp/usr/servers/defaultServer/server.env
-echo database_username=$database_username >> /opt/ibm/wlp/usr/servers/defaultServer/server.env
-echo database_password=$database_password >> /opt/ibm/wlp/usr/servers/defaultServer/server.env
-
-rm -rf $delete_dir
-wget $file_url -O $dir
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-**$delete_dir**, **$dir** and **$file_url** are overrideable arguments that can be defined when creating the plug-ins or when requesting the application.
 
 ### **cluster_size** and **host** parameters for HA deployment across multiple hosts
 
@@ -350,7 +422,7 @@ The **host** parameter allows you to specify the host you would like to use for 
 
 ### Environment Variable Bindings Across Images
 
-Additionally, a user can create cross-image environment variable bindings by making a reference to another image’s environment variable. In this case, we have made several bindings – including database_url=jdbc:mysql://{{MySQL|container_ip}}:3306/{{MySQL|MYSQL_DATABASE}} – in which the database container IP is resolved dynamically at request time and is used to ensure that the application servers can establish a connection with the database.
+Additionally, a user can create cross-image environment variable bindings by making a reference to another image’s environment variable. In this case, we have made several bindings – including database_url=jdbc:mysql://{{MySQL|container_hostname}}:3306/{{MySQL|MYSQL_DATABASE}} – in which the database container name is resolved dynamically at request time and is used to ensure that the application servers can establish a connection with the database.
 
 Here is a list of supported environment variable values:
 
@@ -368,10 +440,12 @@ Here is a list of supported environment variable values:
 
  
 
-### 3-Tier Java (Nginx – Tomcat – MySQL)
+### Multi-Tier Java (Nginx-Tomcat-Solr-MySQL)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b73d41de71cb)
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
+Nginx:
   image: nginx:latest
   publish_all: true
   mem_min: 50m
@@ -380,8 +454,12 @@ LB:
     - !plugin
       id: 0H1Nk
       restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
       arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
 AppServer:
   image: tomcat:8.0.21-jre8
   mem_min: 600m
@@ -389,17 +467,30 @@ AppServer:
   cluster_size: 1
   environment:
     - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MySQL|container_ip}}:3306/{{MySQL|MYSQL_DATABASE}}
+    - database_url=jdbc:mysql://{{MySQL|container_hostname}}:3306/{{MySQL|MYSQL_DATABASE}}
     - database_username={{MySQL|MYSQL_USER}}
     - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
   plugins:
     - !plugin
       id: oncXN
       restart: true
       arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
         - dir=/usr/local/tomcat/webapps/ROOT.war
         - delete_dir=/usr/local/tomcat/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
 MySQL:
   image: mysql:latest
   host: host1
@@ -412,10 +503,12 @@ MySQL:
 
  
 
-### 3-Tier Java (Nginx – Jetty – MySQL)
+### Multi-Tier Java (Nginx-Tomcat-Solr-Oracle-XE)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b73e028371f7)
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
+Nginx:
   image: nginx:latest
   publish_all: true
   mem_min: 50m
@@ -424,298 +517,12 @@ LB:
     - !plugin
       id: 0H1Nk
       restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
       arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
-AppServer:
-  image: jetty:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MySQL|container_ip}}:3306/{{MySQL|MYSQL_DATABASE}}
-    - database_username={{MySQL|MYSQL_USER}}
-    - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/var/lib/jetty/webapps/ROOT.war
-        - delete_dir=/var/lib/jetty/webapps/ROOT
-MySQL:
-  image: mysql:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - MYSQL_USER=root
-    - MYSQL_DATABASE=names
-    - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (Nginx – JBoss – MySQL)
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
-  image: nginx:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: 0H1Nk
-      restart: true
-      arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
-AppServer:
-  image: jboss/wildfly:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MySQL|container_ip}}:3306/{{MySQL|MYSQL_DATABASE}}
-    - database_username={{MySQL|MYSQL_USER}}
-    - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
-        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
-MySQL:
-  image: mysql:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - MYSQL_USER=root
-    - MYSQL_DATABASE=names
-    - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 2-Tier Java (WebSphere – MySQL)
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-AppServer:
-  image: websphere-liberty:webProfile6
-  publish_all: true
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MySQL|container_ip}}:3306/{{MySQL|MYSQL_DATABASE}}
-    - database_username={{MySQL|MYSQL_USER}}
-    - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
-    - LICENSE=accept
-  plugins:
-    - !plugin
-      id: rPuVb
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/opt/ibm/wlp/usr/servers/defaultServer/dropins/dbconnect.war
-        - delete_dir=/opt/ibm/wlp/usr/servers/defaultServer/dropins/dbconnect
-MySQL:
-  image: mysql:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - MYSQL_USER=root
-    - MYSQL_DATABASE=names
-    - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-<http://pygments.org/>
-
-### 3-Tier Java (Nginx – Tomcat – PostgreSQL)
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
-  image: nginx:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: 0H1Nk
-      restart: true
-      arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
-AppServer:
-  image: tomcat:8.0.21-jre8
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=org.postgresql.Driver
-    - database_url=jdbc:postgresql://{{Postgres|container_ip}}:5432/{{Postgres|POSTGRES_DB}}
-    - database_username={{Postgres|POSTGRES_USER}}
-    - database_password={{Postgres|POSTGRES_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/usr/local/tomcat/webapps/ROOT.war
-        - delete_dir=/usr/local/tomcat/webapps/ROOT
-Postgres:
-  image: postgres:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - POSTGRES_USER=root
-    - POSTGRES_PASSWORD={{alphanumeric | 8}}
-    - POSTGRES_DB=names
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (Nginx – Jetty – PostgreSQL)
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
-  image: nginx:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: 0H1Nk
-      restart: true
-      arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
-AppServer:
-  image: jetty:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=org.postgresql.Driver
-    - database_url=jdbc:postgresql://{{Postgres|container_ip}}:5432/{{Postgres|POSTGRES_DB}}
-    - database_username={{Postgres|POSTGRES_USER}}
-    - database_password={{Postgres|POSTGRES_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/var/lib/jetty/webapps/ROOT.war
-        - delete_dir=/var/lib/jetty/webapps/ROOT
-Postgres:
-  image: postgres:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - POSTGRES_USER=root
-    - POSTGRES_PASSWORD={{alphanumeric | 8}}
-    - POSTGRES_DB=names
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (Nginx – JBoss – PostgreSQL)
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
-  image: nginx:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: 0H1Nk
-      restart: true
-      arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
-AppServer:
-  image: jboss/wildfly:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=org.postgresql.Driver
-    - database_url=jdbc:postgresql://{{Postgres|container_ip}}:5432/{{Postgres|POSTGRES_DB}}
-    - database_username={{Postgres|POSTGRES_USER}}
-    - database_password={{Postgres|POSTGRES_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
-        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
-Postgres:
-  image: postgres:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - POSTGRES_USER=root
-    - POSTGRES_PASSWORD={{alphanumeric | 8}}
-    - POSTGRES_DB=names
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 2-Tier Java (WebSphere – PostgreSQL)
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-AppServer:
-  image: websphere-liberty:webProfile6
-  publish_all: true
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=org.postgresql.Driver
-    - database_url=jdbc:postgresql://{{Postgres|container_ip}}:5432/{{Postgres|POSTGRES_DB}}
-    - database_username={{Postgres|POSTGRES_USER}}
-    - database_password={{Postgres|POSTGRES_PASSWORD}}
-    - LICENSE=accept
-  plugins:
-    - !plugin
-      id: rPuVb
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/opt/ibm/wlp/usr/servers/defaultServer/dropins/dbconnect.war
-        - delete_dir=/opt/ibm/wlp/usr/servers/defaultServer/dropins/dbconnect
-Postgres:
-  image: postgres:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - POSTGRES_USER=root
-    - POSTGRES_PASSWORD={{alphanumeric | 8}}
-    - POSTGRES_DB=names
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (Nginx – Tomcat – Oracle-XE)
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
-  image: nginx:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: 0H1Nk
-      restart: true
-      arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
 AppServer:
   image: tomcat:8.0.21-jre8
   mem_min: 600m
@@ -723,18 +530,31 @@ AppServer:
   cluster_size: 1
   environment:
     - database_driverClassName=oracle.jdbc.OracleDriver
-    - database_url=jdbc:oracle:thin:@//{{Oracle|container_ip}}:1521/{{Oracle|sid}}
+    - database_url=jdbc:oracle:thin:@//{{Oracle|container_hostname}}:1521/{{Oracle|sid}}
     - database_username={{Oracle|username}}
     - database_password={{Oracle|password}}
     - TZ=UTC
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
   plugins:
     - !plugin
       id: oncXN
       restart: true
       arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
         - dir=/usr/local/tomcat/webapps/ROOT.war
         - delete_dir=/usr/local/tomcat/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
 Oracle:
   image: wnameless/oracle-xe-11g:latest
   host: host1
@@ -747,10 +567,12 @@ Oracle:
 
  
 
-### 3-Tier Java (Nginx – Jetty – Oracle-XE)
+### Multi-Tier Java (Nginx-Tomcat-Solr-Mongo)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b73a60bd713b)
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
+Nginx:
   image: nginx:latest
   publish_all: true
   mem_min: 50m
@@ -759,163 +581,54 @@ LB:
     - !plugin
       id: 0H1Nk
       restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
       arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
-AppServer:
-  image: jetty:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=oracle.jdbc.OracleDriver
-    - database_url=jdbc:oracle:thin:@//{{Oracle|container_ip}}:1521/{{Oracle|sid}}
-    - database_username={{Oracle|username}}
-    - database_password={{Oracle|password}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/var/lib/jetty/webapps/ROOT.war
-        - delete_dir=/var/lib/jetty/webapps/ROOT
-Oracle:
-  image: wnameless/oracle-xe-11g:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - username=system
-    - password=oracle
-    - sid=xe
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (Nginx – JBoss – Oracle-XE)
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
-  image: nginx:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: 0H1Nk
-      restart: true
-      arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
-AppServer:
-  image: jboss/wildfly:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=oracle.jdbc.OracleDriver
-    - database_url=jdbc:oracle:thin:@//{{Oracle|container_ip}}:1521/{{Oracle|sid}}
-    - database_username={{Oracle|username}}
-    - database_password={{Oracle|password}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
-        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
-Oracle:
-  image: wnameless/oracle-xe-11g:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - username=system
-    - password=oracle
-    - sid=xe
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 2-Tier Java (WebSphere – Oracle-XE)
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-AppServer:
-  image: websphere-liberty:webProfile6
-  publish_all: true
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=oracle.jdbc.OracleDriver
-    - database_url=jdbc:oracle:thin:@//{{Oracle|container_ip}}:1521/{{Oracle|sid}}
-    - database_username={{Oracle|username}}
-    - database_password={{Oracle|password}}
-    - LICENSE=accept
-  plugins:
-    - !plugin
-      id: rPuVb
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/opt/ibm/wlp/usr/servers/defaultServer/dropins/dbconnect.war
-        - delete_dir=/opt/ibm/wlp/usr/servers/defaultServer/dropins/dbconnect
-Oracle:
-  image: wnameless/oracle-xe-11g:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - username=system
-    - password=oracle
-    - sid=xe
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (Nginx – Tomcat – MariaDB)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
-  image: nginx:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: 0H1Nk
-      restart: true
-      arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
 AppServer:
   image: tomcat:8.0.21-jre8
   mem_min: 600m
   host: host1
   cluster_size: 1
   environment:
-    - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MariaDB|container_ip}}:3306/{{MariaDB|MYSQL_DATABASE}}
-    - database_username={{MariaDB|MYSQL_USER}}
-    - database_password={{MariaDB|MYSQL_ROOT_PASSWORD}}
+    - mongo_url={{Mongo|container_private_ip}}:27017/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
   plugins:
     - !plugin
       id: oncXN
       restart: true
       arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
         - dir=/usr/local/tomcat/webapps/ROOT.war
         - delete_dir=/usr/local/tomcat/webapps/ROOT
-MariaDB:
-  image: mariadb:latest
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Mongo:
+  image: mongo:latest
   host: host1
   mem_min: 400m
-  environment:
-    - MYSQL_USER=root
-    - MYSQL_DATABASE=names
-    - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
  
 
-### 3-Tier Java (Nginx – Jetty – MariaDB)
+### Multi-Tier Java (Nginx-Tomcat-Solr-Cassandra)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b73c741171b2)
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
+Nginx:
   image: nginx:latest
   publish_all: true
   mem_min: 50m
@@ -924,8 +637,67 @@ LB:
     - !plugin
       id: 0H1Nk
       restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
       arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
+AppServer:
+  image: tomcat:8.0.21-jre8
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - cassandra_url={{Cassandra|container_private_ip}}:9042/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/usr/local/tomcat/webapps/ROOT.war
+        - delete_dir=/usr/local/tomcat/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Cassandra:
+  image: cassandra:2
+  host: host1
+  mem_min: 400m
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+### Multi-Tier Java (Nginx-Jetty-Solr-MySQL)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b73e9986720d)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Nginx:
+  image: nginx:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: 0H1Nk
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
 AppServer:
   image: jetty:latest
   mem_min: 600m
@@ -933,137 +705,30 @@ AppServer:
   cluster_size: 1
   environment:
     - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MariaDB|container_ip}}:3306/{{MariaDB|MYSQL_DATABASE}}
-    - database_username={{MariaDB|MYSQL_USER}}
-    - database_password={{MariaDB|MYSQL_ROOT_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/var/lib/jetty/webapps/ROOT.war
-        - delete_dir=/var/lib/jetty/webapps/ROOT
-MariaDB:
-  image: mariadb:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - MYSQL_USER=root
-    - MYSQL_DATABASE=names
-    - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (Nginx – JBoss – MariaDB)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-LB:
-  image: nginx:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: 0H1Nk
-      restart: true
-      arguments:
-        - servers=server {{AppServer | container_ip}}:8080;
-AppServer:
-  image: jboss/wildfly:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MariaDB|container_ip}}:3306/{{MariaDB|MYSQL_DATABASE}}
-    - database_username={{MariaDB|MYSQL_USER}}
-    - database_password={{MariaDB|MYSQL_ROOT_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
-        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
-MariaDB:
-  image: mariadb:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - MYSQL_USER=root
-    - MYSQL_DATABASE=names
-    - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 2-Tier Java (WebSphere – MariaDB)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-AppServer:
-  image: websphere-liberty:webProfile6
-  publish_all: true
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MariaDB|container_ip}}:3306/{{MariaDB|MYSQL_DATABASE}}
-    - database_username={{MariaDB|MYSQL_USER}}
-    - database_password={{MariaDB|MYSQL_ROOT_PASSWORD}}
-    - LICENSE=accept
-  plugins:
-    - !plugin
-      id: rPuVb
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/opt/ibm/wlp/usr/servers/defaultServer/dropins/dbconnect.war
-        - delete_dir=/opt/ibm/wlp/usr/servers/defaultServer/dropins/dbconnect
-MariaDB:
-  image: mariadb:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - MYSQL_USER=root
-    - MYSQL_DATABASE=names
-    - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (ApacheHTTP – Tomcat – MySQL)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-HTTP-LB:
-  image: httpd:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: uazUi
-      restart: true
-      arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
-AppServer:
-  image: tomcat:8.0.21-jre8
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MySQL|container_ip}}:3306/{{MySQL|MYSQL_DATABASE}}
+    - database_url=jdbc:mysql://{{MySQL|container_hostname}}:3306/{{MySQL|MYSQL_DATABASE}}
     - database_username={{MySQL|MYSQL_USER}}
     - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
   plugins:
     - !plugin
       id: oncXN
       restart: true
       arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/usr/local/tomcat/webapps/ROOT.war
-        - delete_dir=/usr/local/tomcat/webapps/ROOT
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/var/lib/jetty/webapps/ROOT.war
+        - delete_dir=/var/lib/jetty/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
 MySQL:
   image: mysql:latest
   host: host1
@@ -1076,253 +741,58 @@ MySQL:
 
  
 
-### 3-Tier Java (ApacheHTTP – Jetty – MySQL)
+### Multi-Tier Java (Nginx-Jetty-Solr-Oracle-XE)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b74019467253)
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-HTTP-LB:
-  image: httpd:latest
+Nginx:
+  image: nginx:latest
   publish_all: true
   mem_min: 50m
   host: host1
   plugins:
     - !plugin
-      id: uazUi
+      id: 0H1Nk
       restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
       arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
 AppServer:
   image: jetty:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MySQL|container_ip}}:3306/{{MySQL|MYSQL_DATABASE}}
-    - database_username={{MySQL|MYSQL_USER}}
-    - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/var/lib/jetty/webapps/ROOT.war
-        - delete_dir=/var/lib/jetty/webapps/ROOT
-MySQL:
-  image: mysql:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - MYSQL_USER=root
-    - MYSQL_DATABASE=names
-    - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (ApacheHTTP – JBoss – MySQL)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-HTTP-LB:
-  image: httpd:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: uazUi
-      restart: true
-      arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
-AppServer:
-  image: jboss/wildfly:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MySQL|container_ip}}:3306/{{MySQL|MYSQL_DATABASE}}
-    - database_username={{MySQL|MYSQL_USER}}
-    - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
-        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
-MySQL:
-  image: mysql:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - MYSQL_USER=root
-    - MYSQL_DATABASE=names
-    - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (ApacheHTTP – Tomcat – PostgreSQL)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-HTTP-LB:
-  image: httpd:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: uazUi
-      restart: true
-      arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
-AppServer:
-  image: tomcat:8.0.21-jre8
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=org.postgresql.Driver
-    - database_url=jdbc:postgresql://{{Postgres|container_ip}}:5432/{{Postgres|POSTGRES_DB}}
-    - database_username={{Postgres|POSTGRES_USER}}
-    - database_password={{Postgres|POSTGRES_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/usr/local/tomcat/webapps/ROOT.war
-        - delete_dir=/usr/local/tomcat/webapps/ROOT
-Postgres:
-  image: postgres:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - POSTGRES_USER=root
-    - POSTGRES_PASSWORD={{alphanumeric | 8}}
-    - POSTGRES_DB=names
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (ApacheHTTP – Jetty – PostgreSQL)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-HTTP-LB:
-  image: httpd:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: uazUi
-      restart: true
-      arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
-AppServer:
-  image: jetty:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=org.postgresql.Driver
-    - database_url=jdbc:postgresql://{{Postgres|container_ip}}:5432/{{Postgres|POSTGRES_DB}}
-    - database_username={{Postgres|POSTGRES_USER}}
-    - database_password={{Postgres|POSTGRES_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/var/lib/jetty/webapps/ROOT.war
-        - delete_dir=/var/lib/jetty/webapps/ROOT
-Postgres:
-  image: postgres:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - POSTGRES_USER=root
-    - POSTGRES_PASSWORD={{alphanumeric | 8}}
-    - POSTGRES_DB=names
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (ApacheHTTP – JBoss – PostgreSQL)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-HTTP-LB:
-  image: httpd:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: uazUi
-      restart: true
-      arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
-AppServer:
-  image: jboss/wildfly:latest
-  mem_min: 600m
-  host: host1
-  cluster_size: 1
-  environment:
-    - database_driverClassName=org.postgresql.Driver
-    - database_url=jdbc:postgresql://{{Postgres|container_ip}}:5432/{{Postgres|POSTGRES_DB}}
-    - database_username={{Postgres|POSTGRES_USER}}
-    - database_password={{Postgres|POSTGRES_PASSWORD}}
-  plugins:
-    - !plugin
-      id: oncXN
-      restart: true
-      arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
-        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
-Postgres:
-  image: postgres:latest
-  host: host1
-  mem_min: 400m
-  environment:
-    - POSTGRES_USER=root
-    - POSTGRES_PASSWORD={{alphanumeric | 8}}
-    - POSTGRES_DB=names
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
- 
-
-### 3-Tier Java (ApacheHTTP – Tomcat – Oracle-XE)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-HTTP-LB:
-  image: httpd:latest
-  publish_all: true
-  mem_min: 50m
-  host: host1
-  plugins:
-    - !plugin
-      id: uazUi
-      restart: true
-      arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
-AppServer:
-  image: tomcat:8.0.21-jre8
   mem_min: 600m
   host: host1
   cluster_size: 1
   environment:
     - database_driverClassName=oracle.jdbc.OracleDriver
-    - database_url=jdbc:oracle:thin:@//{{Oracle|container_ip}}:1521/{{Oracle|sid}}
+    - database_url=jdbc:oracle:thin:@//{{Oracle|container_hostname}}:1521/{{Oracle|sid}}
     - database_username={{Oracle|username}}
     - database_password={{Oracle|password}}
     - TZ=UTC
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
   plugins:
     - !plugin
       id: oncXN
       restart: true
       arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
-        - dir=/usr/local/tomcat/webapps/ROOT.war
-        - delete_dir=/usr/local/tomcat/webapps/ROOT
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/var/lib/jetty/webapps/ROOT.war
+        - delete_dir=/var/lib/jetty/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
 Oracle:
   image: wnameless/oracle-xe-11g:latest
   host: host1
@@ -1335,62 +805,201 @@ Oracle:
 
  
 
-### 3-Tier Java (ApacheHTTP – Jetty – Oracle-XE)
+### Multi-Tier Java (Nginx-Jetty-Solr-Mongo)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b740b10c726a)
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-HTTP-LB:
-  image: httpd:latest
+Nginx:
+  image: nginx:latest
   publish_all: true
   mem_min: 50m
   host: host1
   plugins:
     - !plugin
-      id: uazUi
+      id: 0H1Nk
       restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
       arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
 AppServer:
   image: jetty:latest
   mem_min: 600m
   host: host1
   cluster_size: 1
   environment:
-    - database_driverClassName=oracle.jdbc.OracleDriver
-    - database_url=jdbc:oracle:thin:@//{{Oracle|container_ip}}:1521/{{Oracle|sid}}
-    - database_username={{Oracle|username}}
-    - database_password={{Oracle|password}}
+    - mongo_url={{Mongo|container_private_ip}}:27017/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
   plugins:
     - !plugin
       id: oncXN
       restart: true
       arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
         - dir=/var/lib/jetty/webapps/ROOT.war
         - delete_dir=/var/lib/jetty/webapps/ROOT
-Oracle:
-  image: wnameless/oracle-xe-11g:latest
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Mongo:
+  image: mongo:latest
   host: host1
   mem_min: 400m
-  environment:
-    - username=system
-    - password=oracle
-    - sid=xe
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
  
 
-### 3-Tier Java (ApacheHTTP – JBoss – Oracle-XE)
+### Multi-Tier Java (Nginx-Jetty-Solr-Cassandra)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b7908f720087)
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-HTTP-LB:
-  image: httpd:latest
+Nginx:
+  image: nginx:latest
   publish_all: true
   mem_min: 50m
   host: host1
   plugins:
     - !plugin
-      id: uazUi
+      id: 0H1Nk
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
+AppServer:
+  image: jetty:latest
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - cassandra_url={{Cassandra|container_private_ip}}:9042/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
       restart: true
       arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/var/lib/jetty/webapps/ROOT.war
+        - delete_dir=/var/lib/jetty/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Cassandra:
+  image: cassandra:2
+  host: host1
+  mem_min: 400m
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (Nginx-JBoss-Solr-MySQL)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b791f98300c2)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Nginx:
+  image: nginx:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: 0H1Nk
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
+AppServer:
+  image: jboss/wildfly:latest
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - database_driverClassName=com.mysql.jdbc.Driver
+    - database_url=jdbc:mysql://{{MySQL|container_hostname}}:3306/{{MySQL|MYSQL_DATABASE}}
+    - database_username={{MySQL|MYSQL_USER}}
+    - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
+        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+MySQL:
+  image: mysql:latest
+  host: host1
+  mem_min: 400m
+  environment:
+    - MYSQL_USER=root
+    - MYSQL_DATABASE=names
+    - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (Nginx-JBoss-Solr-Oracle-XE)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b79170f500b4)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Nginx:
+  image: nginx:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: 0H1Nk
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
 AppServer:
   image: jboss/wildfly:latest
   mem_min: 600m
@@ -1398,17 +1007,31 @@ AppServer:
   cluster_size: 1
   environment:
     - database_driverClassName=oracle.jdbc.OracleDriver
-    - database_url=jdbc:oracle:thin:@//{{Oracle|container_ip}}:1521/{{Oracle|sid}}
+    - database_url=jdbc:oracle:thin:@//{{Oracle|container_hostname}}:1521/{{Oracle|sid}}
     - database_username={{Oracle|username}}
     - database_password={{Oracle|password}}
+    - TZ=UTC
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
   plugins:
     - !plugin
       id: oncXN
       restart: true
       arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
         - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
         - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
 Oracle:
   image: wnameless/oracle-xe-11g:latest
   host: host1
@@ -1421,7 +1044,122 @@ Oracle:
 
  
 
-### 3-Tier Java (ApacheHTTP – Tomcat – MariaDB)
+### Multi-Tier Java (Nginx-JBoss-Solr-Mongo)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b792982500ca)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Nginx:
+  image: nginx:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: 0H1Nk
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
+AppServer:
+  image: jboss/wildfly:latest
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - mongo_url={{Mongo|container_private_ip}}:27017/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
+        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Mongo:
+  image: mongo:latest
+  host: host1
+  mem_min: 400m
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (Nginx-JBoss-Solr-Cassandra)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b79335be00ef)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Nginx:
+  image: nginx:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: 0H1Nk
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - servers=server {{AppServer | container_private_ip}}:8080;
+        # Use container_hostname if you're using Weave networking
+        #- servers=server {{AppServer | container_hostname}}:8080;
+AppServer:
+  image: jboss/wildfly:latest
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - cassandra_url={{Cassandra|container_private_ip}}:9042/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
+        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Cassandra:
+  image: cassandra:2
+  host: host1
+  mem_min: 400m
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (ApacheLB-Tomcat-Solr-MySQL)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91801e518535a80151898eba7742d1)
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 HTTP-LB:
   image: httpd:latest
@@ -1432,8 +1170,12 @@ HTTP-LB:
     - !plugin
       id: uazUi
       restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
       arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
 AppServer:
   image: tomcat:8.0.21-jre8
   mem_min: 600m
@@ -1441,19 +1183,32 @@ AppServer:
   cluster_size: 1
   environment:
     - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MariaDB|container_ip}}:3306/{{MariaDB|MYSQL_DATABASE}}
-    - database_username={{MariaDB|MYSQL_USER}}
-    - database_password={{MariaDB|MYSQL_ROOT_PASSWORD}}
+    - database_url=jdbc:mysql://{{MySQL|container_hostname}}:3306/{{MySQL|MYSQL_DATABASE}}
+    - database_username={{MySQL|MYSQL_USER}}
+    - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
   plugins:
     - !plugin
       id: oncXN
       restart: true
       arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
         - dir=/usr/local/tomcat/webapps/ROOT.war
         - delete_dir=/usr/local/tomcat/webapps/ROOT
-MariaDB:
-  image: mariadb:latest
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+MySQL:
+  image: mysql:latest
   host: host1
   mem_min: 400m
   environment:
@@ -1464,7 +1219,10 @@ MariaDB:
 
  
 
-### 3-Tier Java (ApacheHTTP – Jetty – MariaDB)
+### Multi-Tier Java (ApacheLB-Tomcat-Solr-Oracle-XE)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b2a86ef32e44)
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 HTTP-LB:
   image: httpd:latest
@@ -1475,8 +1233,188 @@ HTTP-LB:
     - !plugin
       id: uazUi
       restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
       arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
+AppServer:
+  image: tomcat:8.0.21-jre8
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - database_driverClassName=oracle.jdbc.OracleDriver
+    - database_url=jdbc:oracle:thin:@//{{Oracle|container_hostname}}:1521/{{Oracle|sid}}
+    - database_username={{Oracle|username}}
+    - database_password={{Oracle|password}}
+    - TZ=UTC
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/usr/local/tomcat/webapps/ROOT.war
+        - delete_dir=/usr/local/tomcat/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Oracle:
+  image: wnameless/oracle-xe-11g:latest
+  host: host1
+  mem_min: 400m
+  environment:
+    - username=system
+    - password=oracle
+    - sid=xe
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (ApacheLB-Tomcat-Solr-Mongo)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91801f518fa723015198faec2b5e28)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HTTP-LB:
+  image: httpd:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: uazUi
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
+AppServer:
+  image: tomcat:8.0.21-jre8
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - mongo_url={{Mongo|container_private_ip}}:27017/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/usr/local/tomcat/webapps/ROOT.war
+        - delete_dir=/usr/local/tomcat/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Mongo:
+  image: mongo:latest
+  host: host1
+  mem_min: 400m
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (ApacheLB-Tomcat-Solr-Cassandra)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91801f518fa72301519d530eb978da)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HTTP-LB:
+  image: httpd:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: uazUi
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
+AppServer:
+  image: tomcat:8.0.21-jre8
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - cassandra_url={{Cassandra|container_private_ip}}:9042/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/usr/local/tomcat/webapps/ROOT.war
+        - delete_dir=/usr/local/tomcat/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Cassandra:
+  image: cassandra:2
+  host: host1
+  mem_min: 400m
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (ApacheLB-Jetty-Solr-MySQL)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b2a0748e2cc5)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HTTP-LB:
+  image: httpd:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: uazUi
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
 AppServer:
   image: jetty:latest
   mem_min: 600m
@@ -1484,19 +1422,32 @@ AppServer:
   cluster_size: 1
   environment:
     - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MariaDB|container_ip}}:3306/{{MariaDB|MYSQL_DATABASE}}
-    - database_username={{MariaDB|MYSQL_USER}}
-    - database_password={{MariaDB|MYSQL_ROOT_PASSWORD}}
+    - database_url=jdbc:mysql://{{MySQL|container_hostname}}:3306/{{MySQL|MYSQL_DATABASE}}
+    - database_username={{MySQL|MYSQL_USER}}
+    - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
   plugins:
     - !plugin
       id: oncXN
       restart: true
       arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
         - dir=/var/lib/jetty/webapps/ROOT.war
         - delete_dir=/var/lib/jetty/webapps/ROOT
-MariaDB:
-  image: mariadb:latest
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+MySQL:
+  image: mysql:latest
   host: host1
   mem_min: 400m
   environment:
@@ -1507,7 +1458,10 @@ MariaDB:
 
  
 
-### 3-Tier Java (ApacheHTTP – JBoss – MariaDB)
+### Multi-Tier Java (ApacheLB-Jetty-Solr-Oracle-XE)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b2b163952fbf)
+
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 HTTP-LB:
   image: httpd:latest
@@ -1518,8 +1472,188 @@ HTTP-LB:
     - !plugin
       id: uazUi
       restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
       arguments:
-        - BalancerMembers=BalancerMember http://{{AppServer | container_ip}}:8080
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
+AppServer:
+  image: jetty:latest
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - database_driverClassName=oracle.jdbc.OracleDriver
+    - database_url=jdbc:oracle:thin:@//{{Oracle|container_hostname}}:1521/{{Oracle|sid}}
+    - database_username={{Oracle|username}}
+    - database_password={{Oracle|password}}
+    - TZ=UTC
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/var/lib/jetty/webapps/ROOT.war
+        - delete_dir=/var/lib/jetty/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Oracle:
+  image: wnameless/oracle-xe-11g:latest
+  host: host1
+  mem_min: 400m
+  environment:
+    - username=system
+    - password=oracle
+    - sid=xe
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (ApacheLB-Jetty-Solr-Mongo)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b2ac83512ee2)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HTTP-LB:
+  image: httpd:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: uazUi
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
+AppServer:
+  image: jetty:latest
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - mongo_url={{Mongo|container_private_ip}}:27017/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/var/lib/jetty/webapps/ROOT.war
+        - delete_dir=/var/lib/jetty/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Mongo:
+  image: mongo:latest
+  host: host1
+  mem_min: 400m
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (ApacheLB-Jetty-Solr-Cassandra)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b2aa08002e7d)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HTTP-LB:
+  image: httpd:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: uazUi
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
+AppServer:
+  image: jetty:latest
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - cassandra_url={{Cassandra|container_private_ip}}:9042/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/var/lib/jetty/webapps/ROOT.war
+        - delete_dir=/var/lib/jetty/webapps/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Cassandra:
+  image: cassandra:2
+  host: host1
+  mem_min: 400m
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (ApacheLB-JBoss-Solr-MySQL)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91801e518535a8015189b5023349c6)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HTTP-LB:
+  image: httpd:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: uazUi
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
 AppServer:
   image: jboss/wildfly:latest
   mem_min: 600m
@@ -1527,19 +1661,32 @@ AppServer:
   cluster_size: 1
   environment:
     - database_driverClassName=com.mysql.jdbc.Driver
-    - database_url=jdbc:mysql://{{MariaDB|container_ip}}:3306/{{MariaDB|MYSQL_DATABASE}}
-    - database_username={{MariaDB|MYSQL_USER}}
-    - database_password={{MariaDB|MYSQL_ROOT_PASSWORD}}
+    - database_url=jdbc:mysql://{{MySQL|container_hostname}}:3306/{{MySQL|MYSQL_DATABASE}}
+    - database_username={{MySQL|MYSQL_USER}}
+    - database_password={{MySQL|MYSQL_ROOT_PASSWORD}}
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
   plugins:
     - !plugin
       id: oncXN
       restart: true
       arguments:
-        - file_url=https://github.com/dchqinc/dchq-docker-java-example/raw/master/dbconnect.war
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
         - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
         - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
-MariaDB:
-  image: mariadb:latest
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+MySQL:
+  image: mysql:latest
   host: host1
   mem_min: 400m
   environment:
@@ -1547,8 +1694,184 @@ MariaDB:
     - MYSQL_DATABASE=names
     - MYSQL_ROOT_PASSWORD={{alphanumeric|8}}
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
  
 
+### Multi-Tier Java (ApacheLB-JBoss-Solr-Oracle-XE)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b2b3ae983029)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HTTP-LB:
+  image: httpd:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: uazUi
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
+AppServer:
+  image: jboss/wildfly:latest
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - database_driverClassName=oracle.jdbc.OracleDriver
+    - database_url=jdbc:oracle:thin:@//{{Oracle|container_hostname}}:1521/{{Oracle|sid}}
+    - database_username={{Oracle|username}}
+    - database_password={{Oracle|password}}
+    - TZ=UTC
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
+        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Oracle:
+  image: wnameless/oracle-xe-11g:latest
+  host: host1
+  mem_min: 400m
+  environment:
+    - username=system
+    - password=oracle
+    - sid=xe
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (ApacheLB-JBoss-Solr-Mongo)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b2b6002f307c)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HTTP-LB:
+  image: httpd:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: uazUi
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
+AppServer:
+  image: jboss/wildfly:latest
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - mongo_url={{Mongo|container_private_ip}}:27017/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
+        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Mongo:
+  image: mongo:latest
+  host: host1
+  mem_min: 400m
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
+
+### Multi-Tier Java (ApacheLB-JBoss-Solr-Cassandra)
+
+[![Customize and Run](https://dl.dropboxusercontent.com/u/4090128/dchq-customize-and-run.png)](https://www.dchq.io/landing/products.html#/library?org=DCHQ&bl=2c91802051ab66610151b2b868d130e1)
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HTTP-LB:
+  image: httpd:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: uazUi
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
+AppServer:
+  image: jboss/wildfly:latest
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+  environment:
+    - cassandra_url={{Cassandra|container_private_ip}}:9042/dchq
+    - solr_host={{Solr|container_private_ip}}
+    - solr_port=8983
+  plugins:
+    - !plugin
+      id: oncXN
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/dbconnect.war
+        - dir=/opt/jboss/wildfly/standalone/deployments/ROOT.war
+        - delete_dir=/opt/jboss/wildfly/standalone/deployments/ROOT
+Solr:
+  image: solr:latest
+  mem_min: 300m
+  host: host1
+  publish_all: false
+  plugins:
+    - !plugin
+      id: doX8s
+      restart: true
+      arguments:
+        - file_url=https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/raw/master/names.zip
+Cassandra:
+  image: cassandra:2
+  host: host1
+  mem_min: 400m
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+ 
 
 ### Invoking a plug-in to initialize the database separately on a 3-Tier Java (Nginx – Tomcat – MySQL)
 
@@ -1570,7 +1893,7 @@ In this BASH script plug-in, **$MYSQL_USER**, **$MYSQL_ROOT_PASSWORD**, and **$M
 
 **$file_url** is an overrideable argument that you can define when creating the plug-in or when requesting the application. For example, this could be the upgrade.sql file from GitHub:
 
-<https://github.com/dchqinc/dchq-docker-java-example/raw/master/src/main/webapp/WEB-INF/upgrade/upgrade.sql>
+<https://github.com/dchqinc/dchq-docker-java-solr-mongo-cassandra-example/blob/master/src/main/webapp/WEB-INF/upgrade/upgrade.sql>
 
  
 
@@ -1689,6 +2012,10 @@ A command prompt icon should be available next to the containers’ names on the
 For the Tomcat deployment for example, we used the command prompt to make sure that the Java WAR file was deployed under the /usr/local/tomcat/webapps/ directory.
 
 <figure>
+<img src="screenshots/0-In-Browser Container Terminal Button.png"  />
+</figure>
+
+<figure>
 <img src="screenshots/0-In-Browser%20Container%20Terminal.png"  />
 </figure>
 
@@ -1720,7 +2047,7 @@ Developers, as a result will always have the latest Java WAR file deployed on th
 <img src="screenshots/0-Continuous%20Delivery.png"  />
 </figure>
 
-Scaling out the Tomcat Application Server Cluster
+Scaling out the Tomcat Application Server Cluster and leverage the Service Discovery Framework to update the load balancer
 -------------------------------------------------
 
 If the running application becomes resource constrained, a user can to scale out the application to meet the increasing load. Moreover, a user can schedule the scale out during business hours and the scale in during weekends for example.
@@ -1731,15 +2058,37 @@ To scale out the cluster of Tomcat servers from 1 to 2, a user can click on the 
 <img src="screenshots/0-Scale%20Out.png"  />
 </figure>
 
-We then used the BASH plug-in to update Apache HTTP Server's httpd.conf file so that it’s aware of the new application server added. The BASH script plug-ins can also be scheduled to accommodate use cases like cleaning up logs or updating configurations at defined frequencies. 
+As the scale out is executed, the Service Discovery framework will be used to update the load balancer. A plug-in will automatically be executed on Apache HTTP Server to update Apache HTTP Server's httpd.conf file so that it’s aware of the new application server added. This is because we have specified post_scale_out:AppServer as the lifecycle event for this plugin.
 
-To execute a plug-in on a running container, a user can click on the **Actions** menu of the running application and then select **Plug-ins**. A user can then select the load balancer (Apache HTTP Server) container, search for the plug-in that needs to be executed, enable container restart using the toggle button. The default argument for this plug-in will dynamically resolve all the container IP’s of the running Tomcat servers and add them as part of the httpd.conf file.
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+HTTP-LB:
+  image: httpd:latest
+  publish_all: true
+  mem_min: 50m
+  host: host1
+  plugins:
+    - !plugin
+      id: uazUi
+      restart: true
+      lifecycle: on_create, post_scale_out:AppServer, post_scale_in:AppServer
+      arguments:
+        # Use container_private_ip if you're using Docker networking
+        - BalancerMembers=BalancerMember http://{{AppServer | container_private_ip}}:8080
+        # Use container_hostname if you're using Weave networking
+        #- BalancerMembers=BalancerMember http://{{AppServer | container_hostname}}:8080
+AppServer:
+  image: tomcat:8.0.21-jre8
+  mem_min: 600m
+  host: host1
+  cluster_size: 1
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An application time-line is available to track every change made to the application for auditing and diagnostics. This can be accessed from the expandable menu at the bottom of the page of a running application. In this case, the Service Discovery framework executed the Apache HTTP Server plugin **automatically** right after the Application Server cluster was scaled out.
 
 <figure>
 <img src="screenshots/0-Plug-in%20Update%20Apache%20HTTP%20Server.png"  />
 </figure>
 
-An application time-line is available to track every change made to the application for auditing and diagnostics. This can be accessed from the expandable menu at the bottom of the page of a running application.
 
 Alerts and notifications are available for when containers or hosts are down or when the CPU & Memory Utilization of either hosts or containers exceed a defined threshold.
 
