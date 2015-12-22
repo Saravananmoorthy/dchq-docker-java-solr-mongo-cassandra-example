@@ -1,3 +1,7 @@
+<figure>
+<img src="http://ww1.prweb.com/prfiles/2015/07/21/12907174/gI_146921_dchq-logo.png" alt="" />
+</figure>
+
 This is an extension of this project (https://github.com/dchqinc/dchq-docker-java-example). The application now supports **Solr** for full-text search and both **Mongo** & **Cassandra** as the supported databases.
 
 To run & manage the **24** Java application templates in this project on 13 different clouds and virtualization platforms (including vSphere, OpenStack, AWS, Rackspace, Microsoft Azure, Google Compute Engine, DigitalOcean, IBM SoftLayer, etc.), make sure that you either:
